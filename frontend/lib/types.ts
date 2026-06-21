@@ -68,6 +68,28 @@ export type MapPayload = {
   markers: Marker[];
   regions: Region[];
   overlays: MapOverlay[];
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type MapSummary = {
+  id: number;
+  title: string;
+  subtitle: string;
+  image_url: string | null;
+  marker_count: number;
+  region_count: number;
+  overlay_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type MapPlacement = {
+  map_id: number;
+  map_title: string;
+  kind: "marker" | "region" | "overlay";
+  object_id: number;
+  label: string | null;
 };
 
 export type TimelineEvent = {

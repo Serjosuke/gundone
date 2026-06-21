@@ -32,7 +32,7 @@ TOKEN_TTL_SECONDS = int(os.getenv("TOKEN_TTL_SECONDS", str(60 * 60 * 24 * 7)))
 CORS_ORIGINS = [item.strip() for item in os.getenv("CORS_ORIGINS", "*").split(",") if item.strip()]
 ALLOWED_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 
-app = FastAPI(title="Timur Gandon API", version="0.4.0")
+app = FastAPI(title="Timur Gandon API", version="0.5.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS or ["*"],
@@ -276,7 +276,7 @@ def on_startup() -> None:
 
 @app.get("/health")
 def health():
-    return {"ok": True, "service": "atlas-forge-api", "version": "0.4.0"}
+    return {"ok": True, "service": "atlas-forge-api", "version": "0.5.0"}
 
 
 @app.post("/api/auth/login")
@@ -321,6 +321,36 @@ def get_card(card_id: int):
     return row_to_card(row)
 
 
+@app.get("/api/cards/{card_id}/placements")
+def list_card_placements(card_id: int):
+    """Return every visual reference to an article across all maps."""
+    with db() as conn:
+        if not conn.execute("SELECT id FROM cards WHERE id = ?", (card_id,)).fetchone():
+            raise HTTPException(404, "Карточка не найдена")
+        rows = conn.execute(
+            """
+            SELECT maps.id AS map_id, maps.title AS map_title, 'marker' AS kind,
+                   markers.id AS object_id, COALESCE(markers.label, maps.title) AS label
+            FROM markers JOIN maps ON maps.id = markers.map_id
+            WHERE markers.card_id = ?
+            UNION ALL
+            SELECT maps.id AS map_id, maps.title AS map_title, 'region' AS kind,
+                   regions.id AS object_id, regions.label AS label
+            FROM regions JOIN maps ON maps.id = regions.map_id
+            WHERE regions.card_id = ?
+            UNION ALL
+            SELECT maps.id AS map_id, maps.title AS map_title, 'overlay' AS kind,
+                   map_overlays.id AS object_id,
+                   COALESCE(map_overlays.label, maps.title) AS label
+            FROM map_overlays JOIN maps ON maps.id = map_overlays.map_id
+            WHERE map_overlays.card_id = ?
+            ORDER BY map_title, kind, object_id
+            """,
+            (card_id, card_id, card_id),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
 @app.post("/api/cards", status_code=201)
 def create_card(payload: CardInput, _: dict = Depends(require_admin)):
     stamp = now()
@@ -359,6 +389,36 @@ def delete_card(card_id: int, _: dict = Depends(require_admin)):
         conn.execute("DELETE FROM cards WHERE id = ?", (card_id,))
 
 
+@app.get("/api/maps")
+def list_maps():
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT maps.*,
+                (SELECT COUNT(*) FROM markers WHERE markers.map_id = maps.id) AS marker_count,
+                (SELECT COUNT(*) FROM regions WHERE regions.map_id = maps.id) AS region_count,
+                (SELECT COUNT(*) FROM map_overlays WHERE map_overlays.map_id = maps.id) AS overlay_count
+            FROM maps
+            ORDER BY maps.updated_at DESC, maps.id DESC
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+@app.post("/api/maps", status_code=201)
+def create_map(payload: MapInput, _: dict = Depends(require_admin)):
+    stamp = now()
+    with db() as conn:
+        cursor = conn.execute(
+            "INSERT INTO maps(title,subtitle,image_url,created_at,updated_at) VALUES(?,?,?,?,?)",
+            (payload.title, payload.subtitle, payload.image_url, stamp, stamp),
+        )
+        row = conn.execute("SELECT * FROM maps WHERE id = ?", (cursor.lastrowid,)).fetchone()
+    result = dict(row)
+    result.update({"markers": [], "regions": [], "overlays": []})
+    return result
+
+
 @app.get("/api/maps/{map_id}")
 def get_map(map_id: int):
     with db() as conn:
@@ -394,9 +454,28 @@ def update_map(map_id: int, payload: MapInput, _: dict = Depends(require_admin))
     with db() as conn:
         if not conn.execute("SELECT id FROM maps WHERE id = ?", (map_id,)).fetchone():
             raise HTTPException(404, "Карта не найдена")
-        conn.execute("UPDATE maps SET title=?, subtitle=?, image_url=?, updated_at=? WHERE id=?", (payload.title, payload.subtitle, payload.image_url, now(), map_id))
+        conn.execute(
+            "UPDATE maps SET title=?, subtitle=?, image_url=?, updated_at=? WHERE id=?",
+            (payload.title, payload.subtitle, payload.image_url, now(), map_id),
+        )
         row = conn.execute("SELECT * FROM maps WHERE id = ?", (map_id,)).fetchone()
     return dict(row)
+
+
+@app.delete("/api/maps/{map_id}", status_code=204)
+def delete_map(map_id: int, _: dict = Depends(require_admin)):
+    with db() as conn:
+        exists = conn.execute("SELECT id FROM maps WHERE id = ?", (map_id,)).fetchone()
+        if not exists:
+            raise HTTPException(404, "Карта не найдена")
+        map_count = conn.execute("SELECT COUNT(*) AS count FROM maps").fetchone()["count"]
+        if map_count <= 1:
+            raise HTTPException(400, "Нельзя удалить последнюю карту мира")
+        # Articles are global. Delete only map-local objects.
+        conn.execute("DELETE FROM markers WHERE map_id = ?", (map_id,))
+        conn.execute("DELETE FROM regions WHERE map_id = ?", (map_id,))
+        conn.execute("DELETE FROM map_overlays WHERE map_id = ?", (map_id,))
+        conn.execute("DELETE FROM maps WHERE id = ?", (map_id,))
 
 
 @app.post("/api/maps/{map_id}/markers", status_code=201)

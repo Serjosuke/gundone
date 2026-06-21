@@ -1,4 +1,4 @@
-import { Card, CardType, MapOverlay, MapPayload, Marker, Region, TimelineEvent } from "./types";
+import { Card, CardType, MapOverlay, MapPayload, MapPlacement, MapSummary, Marker, Region, TimelineEvent } from "./types";
 
 const BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(/\/$/, "");
 let adminToken: string | null = null;
@@ -44,17 +44,21 @@ export const api = {
   createCard: (body: CardDraft) => request<Card>("/api/cards", { method: "POST", body: JSON.stringify(body) }),
   updateCard: (id: number, body: CardDraft) => request<Card>(`/api/cards/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   deleteCard: (id: number) => request<void>(`/api/cards/${id}`, { method: "DELETE" }),
-  map: () => request<MapPayload>("/api/maps/1", { cache: "no-store" }),
-  updateMap: (body: Pick<MapPayload, "title" | "subtitle" | "image_url">) => request<MapPayload>("/api/maps/1", { method: "PATCH", body: JSON.stringify(body) }),
-  createMarker: (body: { card_id: number; x: number; y: number; label?: string | null }) => request<Marker>("/api/maps/1/markers", { method: "POST", body: JSON.stringify(body) }),
-  updateMarker: (id: number, body: { card_id: number; x: number; y: number; label?: string | null }) => request<Marker>(`/api/maps/1/markers/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
-  deleteMarker: (id: number) => request<void>(`/api/maps/1/markers/${id}`, { method: "DELETE" }),
-  createRegion: (body: RegionDraft) => request<Region>("/api/maps/1/regions", { method: "POST", body: JSON.stringify(body) }),
-  updateRegion: (id: number, body: RegionDraft) => request<Region>(`/api/maps/1/regions/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
-  deleteRegion: (id: number) => request<void>(`/api/maps/1/regions/${id}`, { method: "DELETE" }),
-  createOverlay: (body: OverlayDraft) => request<MapOverlay>("/api/maps/1/overlays", { method: "POST", body: JSON.stringify(body) }),
-  updateOverlay: (id: number, body: OverlayDraft) => request<MapOverlay>(`/api/maps/1/overlays/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
-  deleteOverlay: (id: number) => request<void>(`/api/maps/1/overlays/${id}`, { method: "DELETE" }),
+  placements: (cardId: number) => request<MapPlacement[]>(`/api/cards/${cardId}/placements`, { cache: "no-store" }),
+  maps: () => request<MapSummary[]>("/api/maps", { cache: "no-store" }),
+  map: (mapId: number) => request<MapPayload>(`/api/maps/${mapId}`, { cache: "no-store" }),
+  createMap: (body: Pick<MapPayload, "title" | "subtitle" | "image_url">) => request<MapPayload>("/api/maps", { method: "POST", body: JSON.stringify(body) }),
+  updateMap: (mapId: number, body: Pick<MapPayload, "title" | "subtitle" | "image_url">) => request<MapPayload>(`/api/maps/${mapId}`, { method: "PATCH", body: JSON.stringify(body) }),
+  deleteMap: (mapId: number) => request<void>(`/api/maps/${mapId}`, { method: "DELETE" }),
+  createMarker: (mapId: number, body: { card_id: number; x: number; y: number; label?: string | null }) => request<Marker>(`/api/maps/${mapId}/markers`, { method: "POST", body: JSON.stringify(body) }),
+  updateMarker: (mapId: number, id: number, body: { card_id: number; x: number; y: number; label?: string | null }) => request<Marker>(`/api/maps/${mapId}/markers/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  deleteMarker: (mapId: number, id: number) => request<void>(`/api/maps/${mapId}/markers/${id}`, { method: "DELETE" }),
+  createRegion: (mapId: number, body: RegionDraft) => request<Region>(`/api/maps/${mapId}/regions`, { method: "POST", body: JSON.stringify(body) }),
+  updateRegion: (mapId: number, id: number, body: RegionDraft) => request<Region>(`/api/maps/${mapId}/regions/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  deleteRegion: (mapId: number, id: number) => request<void>(`/api/maps/${mapId}/regions/${id}`, { method: "DELETE" }),
+  createOverlay: (mapId: number, body: OverlayDraft) => request<MapOverlay>(`/api/maps/${mapId}/overlays`, { method: "POST", body: JSON.stringify(body) }),
+  updateOverlay: (mapId: number, id: number, body: OverlayDraft) => request<MapOverlay>(`/api/maps/${mapId}/overlays/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  deleteOverlay: (mapId: number, id: number) => request<void>(`/api/maps/${mapId}/overlays/${id}`, { method: "DELETE" }),
   timeline: () => request<TimelineEvent[]>("/api/timeline", { cache: "no-store" }),
   saveTimeline: (cardId: number, body: { card_id: number; sort_year: number; date_label: string; description: string }) => request(`/api/timeline/${cardId}`, { method: "PUT", body: JSON.stringify(body) }),
   deleteTimeline: (cardId: number) => request<void>(`/api/timeline/${cardId}`, { method: "DELETE" }),
