@@ -1,0 +1,23 @@
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/data:/app/data
+    environment:
+      DATA_DIR: /app/data
+      DATABASE_PATH: /app/data/atlas.db
+      UPLOAD_DIR: /app/data/uploads
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change-me}
+      AUTH_SECRET: ${AUTH_SECRET:-change-this-secret-before-public-deploy}
+      CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    depends_on:
+      - backend
