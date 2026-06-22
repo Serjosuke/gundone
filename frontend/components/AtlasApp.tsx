@@ -702,7 +702,7 @@ export function AtlasApp({ adminMode = false }: { adminMode?: boolean }) {
         <button className={view === "library" ? "active" : ""} onClick={() => setView("library")}>▤ Библиотека <span>{cards.length}</span></button>
         <button className={view === "timeline" ? "active" : ""} onClick={() => setView("timeline")}>⌁ Таймлайн <span>{timeline.length}</span></button>
       </nav>
-      <div className="sidebar-intro"><span className="eyebrow">Мир Эйры</span><p>{adminMode ? "Редактор карт и связанной wiki." : "Живой атлас мест, людей, событий и тайн."}</p></div>
+      <div className="sidebar-intro"><span className="eyebrow">Сделано Сержом за шавуху и энергос</span><p>{adminMode ? "Редактор карт и связанной wiki." : "Живой атлас мест, людей, событий и тайн."}</p></div>
       <div className="search-box"><span>⌕</span><input placeholder="Искать в энциклопедии" value={query} onChange={(event) => setQuery(event.target.value)} /><kbd>⌘K</kbd></div>
       <div className="filter-row"><button className={filter === "all" ? "active" : ""} onClick={() => setFilter("all")}>Все <span>{cards.length}</span></button>{Object.entries(typeMeta).map(([key, meta]) => <button key={key} className={filter === key ? "active" : ""} onClick={() => setFilter(key as CardType)}>{meta.icon} <span>{meta.label}</span></button>)}</div>
 
