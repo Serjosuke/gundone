@@ -831,7 +831,7 @@ export function AtlasApp({ adminMode = false }: { adminMode?: boolean }) {
 
   return <main className="app-shell">
     <header className="topbar">
-      <a className="brand" href={adminMode ? "/admin" : "/"}><span className="brand-mark">A</span><span><b>Timur Gandon</b><small>{adminMode ? "keeper console" : "world encyclopedia"}</small></span></a>
+      <a className="brand" href={adminMode ? "/admin" : "/"}><span className="brand-mark">Larp</span><span><b>Timur Gandon</b><small>{adminMode ? "keeper console" : "world encyclopedia"}</small></span></a>
       <div className="topbar-actions">
         {adminMode ? <><a className="ghost-link" href="/" target="_blank">Публичный сайт ↗</a><button className="ghost-button" onClick={logout}>Выйти</button><button className="primary-button" onClick={() => setEditingCard("new")}>+ Статья</button></> : <a className="ghost-link" href="/admin">Войти хранителю</a>}
       </div>
