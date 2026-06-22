@@ -4,6 +4,7 @@ export type Card = {
   id: number;
   title: string;
   type: CardType;
+  subtype: string;
   excerpt: string;
   content: string;
   cover_color: string;
@@ -23,6 +24,7 @@ export type Marker = {
   label: string | null;
   card_title: string;
   card_type: CardType;
+  card_subtype?: string | null;
   card_color: string;
 };
 
@@ -55,6 +57,7 @@ export type MapOverlay = {
   display_type: OverlayDisplayType;
   card_title?: string | null;
   card_type?: CardType | null;
+  card_subtype?: string | null;
   card_color?: string | null;
   created_at: string;
   updated_at: string;
@@ -102,6 +105,7 @@ export type TimelineEvent = {
   description: string;
   card_title: string;
   card_type: CardType;
+  card_subtype?: string | null;
   card_color: string;
   card_image_url: string | null;
   created_at: string;

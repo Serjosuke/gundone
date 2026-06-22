@@ -287,3 +287,31 @@ select, select option { color:#f4eff8; background:#201a28; }
 @media (max-width:760px) {
   .map-ratio-note { top:8px; right:8px; font-size:8px; }
 }
+
+/* v0.7 — card subtypes, linked tags and wiki references */
+.subtype-row { display:flex; flex-wrap:wrap; gap:4px; max-height:68px; overflow:auto; padding:0 1px 10px; scrollbar-width:none; }
+.subtype-row::-webkit-scrollbar { display:none; }
+.subtype-row button { border:1px solid rgba(241,235,255,.12); border-radius:999px; padding:4px 7px; color:#a9a1b1; background:rgba(255,255,255,.025); cursor:pointer; font-size:9px; }
+.subtype-row button:hover,.subtype-row button.active { border-color:rgba(199,243,108,.45); color:#edffd2; background:rgba(199,243,108,.1); }
+
+.library-card { cursor:default; }
+.library-card-main { display:grid; width:100%; padding:0; border:0; color:inherit; background:transparent; text-align:left; cursor:pointer; }
+.library-card-main > div:last-child { display:grid; gap:6px; padding:12px 12px 6px; }
+.library-card:hover .library-card-main { color:inherit; }
+.library-card .card-tags { padding:0 12px 12px; }
+.card-tags button,.tags button { border:1px solid var(--line); border-radius:6px; padding:4px 6px; color:#bcb5c7; background:rgba(255,255,255,.03); cursor:pointer; font-size:9px; }
+.card-tags button:hover,.tags button:hover { border-color:rgba(199,243,108,.42); color:#edffd2; background:rgba(199,243,108,.09); }
+.tags span { display:none; }
+
+.wiki-link,.inline-tag-link { display:inline; margin:0; padding:0; border:0; border-bottom:1px solid rgba(199,243,108,.58); color:#e7ffc0; background:transparent; cursor:pointer; font:inherit; line-height:inherit; }
+.wiki-link:hover,.inline-tag-link:hover { color:#fff6bf; border-bottom-color:#fff6bf; }
+.wiki-missing { border-bottom:1px dashed rgba(255,157,177,.62); color:#ffd0da; cursor:help; }
+
+.relations .relation-copy { display:grid; place-items:initial; width:auto; height:auto; min-width:0; gap:2px; color:inherit; background:transparent; }
+.relations .relation-copy b { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; }
+.relations .relation-copy small { color:var(--muted); font-size:8px; }
+.backlinks h3::after { content:" автоматически"; margin-left:6px; color:var(--muted); font-size:8px; font-weight:600; }
+
+@media (max-width:760px) {
+  .subtype-row { max-height:56px; }
+}

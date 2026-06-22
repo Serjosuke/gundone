@@ -1,7 +1,7 @@
 "use client";
 
 import { ChangeEvent, PointerEvent, WheelEvent, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { api, setAdminToken, typeMeta } from "../lib/api";
 import { Card, CardType, MapOverlay, MapPayload, MapPlacement, MapPoint, MapSummary, Marker, Region, TimelineDraft, TimelineEvent } from "../lib/types";
 
@@ -21,6 +21,7 @@ type Interaction =
 const blankCard = (): CardDraft => ({
   title: "Новая карточка",
   type: "location",
+  subtype: "",
   excerpt: "Короткое описание для карты и библиотеки.",
   content: "## Новый раздел\nОпишите место, персонажа, событие или тайну вашего мира.",
   cover_color: "#A8C7FF",
@@ -35,11 +36,57 @@ function formatDate(value: string) {
   return new Intl.DateTimeFormat("ru-RU", { dateStyle: "medium" }).format(new Date(value));
 }
 
-function MarkdownView({ content }: { content: string }) {
+function cardKind(card: Pick<Card, "type" | "subtype">) {
+  return card.subtype ? `${typeMeta[card.type].label} · ${card.subtype}` : typeMeta[card.type].label;
+}
+
+function normalizeTitle(value: string) {
+  return value.trim().toLocaleLowerCase("ru-RU");
+}
+
+function wikiTargets(content: string) {
+  return Array.from(content.matchAll(/\[\[([^\]]+)\]\]/g))
+    .map((match) => match[1].trim().split("|", 1)[0].trim())
+    .filter((target) => target && !target.startsWith("#"));
+}
+
+function MarkdownView({ content, cards, onOpenCard, onTag }: { content: string; cards: Card[]; onOpenCard: (card: Card) => void; onTag: (tag: string) => void }) {
+  const renderInline = (line: string) => {
+    const pieces: ReactNode[] = [];
+    const token = /\[\[([^\]]+)\]\]|#([\p{L}\p{N}_-]+)/gu;
+    let lastIndex = 0;
+    let key = 0;
+    for (const match of line.matchAll(token)) {
+      const index = match.index ?? 0;
+      if (index > lastIndex) pieces.push(line.slice(lastIndex, index));
+      if (match[1] !== undefined) {
+        const raw = match[1].trim();
+        const [targetRaw, labelRaw] = raw.split("|", 2);
+        const target = targetRaw.trim();
+        const label = (labelRaw || target).trim();
+        if (target.startsWith("#")) {
+          const tag = target.slice(1).trim();
+          pieces.push(<button type="button" className="inline-tag-link" key={`tag-${key++}`} onClick={() => onTag(tag)}>#{label.replace(/^#/, "")}</button>);
+        } else {
+          const card = cards.find((item) => normalizeTitle(item.title) === normalizeTitle(target));
+          pieces.push(card
+            ? <button type="button" className="wiki-link" key={`wiki-${key++}`} onClick={() => onOpenCard(card)} title={`${cardKind(card)} — ${card.excerpt || "Открыть статью"}`}>{label}</button>
+            : <span className="wiki-missing" key={`missing-${key++}`} title={`Статья «${target}» пока не найдена`}>{label}</span>);
+        }
+      } else if (match[2]) {
+        const tag = match[2];
+        pieces.push(<button type="button" className="inline-tag-link" key={`short-tag-${key++}`} onClick={() => onTag(tag)}>#{tag}</button>);
+      }
+      lastIndex = index + match[0].length;
+    }
+    if (lastIndex < line.length) pieces.push(line.slice(lastIndex));
+    return pieces;
+  };
+
   return <div className="markdown">{content.split("\n").map((line, index) => {
-    if (line.startsWith("## ")) return <h3 key={index}>{line.slice(3)}</h3>;
+    if (line.startsWith("## ")) return <h3 key={index}>{renderInline(line.slice(3))}</h3>;
     if (!line.trim()) return <div className="line-space" key={index} />;
-    return <p key={index}>{line}</p>;
+    return <p key={index}>{renderInline(line)}</p>;
   })}</div>;
 }
 
@@ -64,7 +111,7 @@ function CardEditor({ initial, cards, timelineItem, onSave, onClose, onDelete, o
   onClose: () => void; onDelete?: () => Promise<void>; onUpload: (file: File) => Promise<string>;
 }) {
   const [value, setValue] = useState<CardDraft>(initial ? {
-    title: initial.title, type: initial.type, excerpt: initial.excerpt, content: initial.content,
+    title: initial.title, type: initial.type, subtype: initial.subtype || "", excerpt: initial.excerpt, content: initial.content,
     cover_color: initial.cover_color, cover_image_url: initial.cover_image_url, tags: initial.tags, relations: initial.relations,
   } : blankCard());
   const [timeline, setTimeline] = useState<TimelineDraft>({ enabled: Boolean(timelineItem), sort_year: timelineItem?.sort_year ?? 0, date_label: timelineItem?.date_label ?? "", description: timelineItem?.description ?? "" });
@@ -75,8 +122,9 @@ function CardEditor({ initial, cards, timelineItem, onSave, onClose, onDelete, o
     <div className="editor-fields">
       <label>Название<input value={value.title} onChange={(event) => set("title", event.target.value)} /></label>
       <label>Тип<select value={value.type} onChange={(event) => set("type", event.target.value as CardType)}>{Object.entries(typeMeta).map(([key, meta]) => <option key={key} value={key}>{meta.icon} {meta.label}</option>)}</select></label>
+      <label>Подтип <span>Необязательно: например, «Гость»</span><input list="subtype-suggestions" value={value.subtype} onChange={(event) => set("subtype", event.target.value)} placeholder="Например: Гость" /><datalist id="subtype-suggestions">{Array.from(new Set(cards.filter((card) => card.type === value.type && card.subtype).map((card) => card.subtype))).map((subtype) => <option key={subtype} value={subtype} />)}</datalist></label>
       <label>Короткое описание<textarea rows={3} value={value.excerpt} onChange={(event) => set("excerpt", event.target.value)} /></label>
-      <label>Основной текст <span>Заголовок раздела: ## Название</span><textarea rows={10} value={value.content} onChange={(event) => set("content", event.target.value)} /></label>
+      <label>Основной текст <span>Заголовок: ## Название · статья: [[Название]] · тег: [[#Тег]]</span><textarea rows={10} value={value.content} onChange={(event) => set("content", event.target.value)} /></label>
       <label>Теги <span>Через запятую</span><input value={value.tags.join(", ")} onChange={(event) => set("tags", event.target.value.split(",").map((tag) => tag.trim()).filter(Boolean))} /></label>
       <label>Акцент статьи<div className="color-row"><input type="color" value={value.cover_color} onChange={(event) => set("cover_color", event.target.value)} /><code>{value.cover_color}</code></div></label>
       <div className="image-editor"><span>Обложка статьи</span>{value.cover_image_url ? <img src={value.cover_image_url} alt="Обложка" /> : <div className="image-placeholder">Изображение не выбрано</div>}<input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden onChange={uploadCover} /><div className="image-buttons"><button type="button" className="secondary-button" onClick={() => fileRef.current?.click()}>{uploading ? "Загрузка…" : "Загрузить"}</button>{value.cover_image_url && <button type="button" className="text-button" onClick={() => set("cover_image_url", null)}>Убрать</button>}</div></div>
@@ -90,7 +138,7 @@ function CardEditor({ initial, cards, timelineItem, onSave, onClose, onDelete, o
 function MarkerPicker({ cards, onChoose, onCreate, onClose }: { cards: Card[]; onChoose: (card: Card) => void; onCreate: () => void; onClose: () => void }) {
   const [query, setQuery] = useState("");
   const results = cards.filter((card) => `${card.title} ${card.excerpt}`.toLowerCase().includes(query.toLowerCase()));
-  return <aside className="object-editor marker-picker"><div className="editor-head"><div><span className="eyebrow">Новая метка</span><h2>Привяжите её к статье</h2></div><button className="icon-button" onClick={onClose}>×</button></div><div className="editor-fields compact-fields"><p className="panel-note">Выберите уже существующую запись или создайте новую. Метка не бывает «пустой» — так карта и вики остаются связанными.</p><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Поиск статьи" />{results.map((card) => <button className="picker-card" key={card.id} onClick={() => onChoose(card)}><span style={{ background: card.cover_color }}>{typeMeta[card.type].icon}</span><div><b>{card.title}</b><small>{typeMeta[card.type].label}</small></div><i>→</i></button>)}</div><div className="editor-actions"><button className="primary-button" onClick={onCreate}>+ Новая статья</button></div></aside>;
+  return <aside className="object-editor marker-picker"><div className="editor-head"><div><span className="eyebrow">Новая метка</span><h2>Привяжите её к статье</h2></div><button className="icon-button" onClick={onClose}>×</button></div><div className="editor-fields compact-fields"><p className="panel-note">Выберите уже существующую запись или создайте новую. Метка не бывает «пустой» — так карта и вики остаются связанными.</p><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Поиск статьи" />{results.map((card) => <button className="picker-card" key={card.id} onClick={() => onChoose(card)}><span style={{ background: card.cover_color }}>{typeMeta[card.type].icon}</span><div><b>{card.title}</b><small>{cardKind(card)}</small></div><i>→</i></button>)}</div><div className="editor-actions"><button className="primary-button" onClick={onCreate}>+ Новая статья</button></div></aside>;
 }
 
 function RegionEditor({ region, cards, onClose, onSave, onDelete, onStartVertexEdit }: { region: Region; cards: Card[]; onClose: () => void; onSave: (value: Pick<Region, "label" | "color" | "card_id" | "points">) => Promise<void>; onDelete: () => Promise<void>; onStartVertexEdit: () => void }) {
@@ -441,8 +489,10 @@ function MapSurface({
   </section>;
 }
 
-function LibraryView({ cards, onSelect }: { cards: Card[]; onSelect: (card: Card) => void }) { return <section className="catalog-view"><div className="content-heading"><span className="eyebrow">Библиотека мира</span><h1>Все статьи</h1><p>Места, персонажи, фракции, артефакты и исторические события.</p></div><div className="library-grid">{cards.map((card) => <button className="library-card" key={card.id} onClick={() => onSelect(card)}><div className="library-cover" style={{ background: card.cover_image_url ? `linear-gradient(rgba(20,17,25,.14),rgba(20,17,25,.48)),url("${card.cover_image_url}") center/cover` : `linear-gradient(145deg,${card.cover_color},#211a2a)` }}><span>{typeMeta[card.type].icon}</span></div><div><small>{typeMeta[card.type].label}</small><h2>{card.title}</h2><p>{card.excerpt}</p><div className="card-tags">{card.tags.slice(0, 3).map((tag) => <i key={tag}>#{tag}</i>)}</div></div></button>)}</div></section>; }
-function TimelineView({ events, onSelect }: { events: TimelineEvent[]; onSelect: (id: number) => void }) { return <section className="timeline-view"><div className="content-heading"><span className="eyebrow">История мира</span><h1>Таймлайн</h1><p>События и статьи, расположенные по хронологии.</p></div>{events.length ? <div className="timeline-list">{events.map((event) => <button className="timeline-card" key={event.id} onClick={() => onSelect(event.card_id)}><time className="timeline-year">{event.date_label}</time><span className="timeline-pin" style={{ borderColor: event.card_color }} /><div className="timeline-entry"><span>{typeMeta[event.card_type].label}</span><h2>{event.card_title}</h2><p>{event.description}</p></div></button>)}</div> : <div className="empty-state">Пока нет записей. В редакторе включите «Показать на таймлайне» для любой карточки.</div>}</section>; }
+function LibraryView({ cards, onSelect, onTag, title, description }: { cards: Card[]; onSelect: (card: Card) => void; onTag: (tag: string) => void; title?: string; description?: string }) {
+  return <section className="catalog-view"><div className="content-heading"><span className="eyebrow">Библиотека мира</span><h1>{title || "Все статьи"}</h1><p>{description || "Места, персонажи, фракции, артефакты и исторические события."}</p></div><div className="library-grid">{cards.map((card) => <article className="library-card" key={card.id}><button className="library-card-main" onClick={() => onSelect(card)}><div className="library-cover" style={{ background: card.cover_image_url ? `linear-gradient(rgba(20,17,25,.14),rgba(20,17,25,.48)),url("${card.cover_image_url}") center/cover` : `linear-gradient(145deg,${card.cover_color},#211a2a)` }}><span>{typeMeta[card.type].icon}</span></div><div><small>{cardKind(card)}</small><h2>{card.title}</h2><p>{card.excerpt}</p></div></button><div className="card-tags">{card.tags.slice(0, 4).map((tag) => <button type="button" key={tag} onClick={() => onTag(tag)}>#{tag}</button>)}</div></article>)}</div>{!cards.length && <div className="empty-state">Ничего не найдено. Попробуйте изменить поиск, тип или подтип.</div>}</section>;
+}
+function TimelineView({ events, onSelect }: { events: TimelineEvent[]; onSelect: (id: number) => void }) { return <section className="timeline-view"><div className="content-heading"><span className="eyebrow">История мира</span><h1>Таймлайн</h1><p>События и статьи, расположенные по хронологии.</p></div>{events.length ? <div className="timeline-list">{events.map((event) => <button className="timeline-card" key={event.id} onClick={() => onSelect(event.card_id)}><time className="timeline-year">{event.date_label}</time><span className="timeline-pin" style={{ borderColor: event.card_color }} /><div className="timeline-entry"><span>{event.card_subtype ? `${typeMeta[event.card_type].label} · ${event.card_subtype}` : typeMeta[event.card_type].label}</span><h2>{event.card_title}</h2><p>{event.description}</p></div></button>)}</div> : <div className="empty-state">Пока нет записей. В редакторе включите «Показать на таймлайне» для любой карточки.</div>}</section>; }
 
 export function AtlasApp({ adminMode = false }: { adminMode?: boolean }) {
   const [cards, setCards] = useState<Card[]>([]);
@@ -464,6 +514,7 @@ export function AtlasApp({ adminMode = false }: { adminMode?: boolean }) {
   const [view, setView] = useState<ViewMode>("map");
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<CardType | "all">("all");
+  const [subtypeFilter, setSubtypeFilter] = useState("all");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [authState, setAuthState] = useState<"checking" | "guest" | "ready">(adminMode ? "checking" : "ready");
@@ -472,10 +523,41 @@ export function AtlasApp({ adminMode = false }: { adminMode?: boolean }) {
   const selectedMarker = map?.markers.find((marker) => marker.id === selectedMarkerId) || null;
   const selectedRegion = map?.regions.find((region) => region.id === selectedRegionId) || null;
   const selectedOverlay = map?.overlays.find((overlay) => overlay.id === selectedOverlayId) || null;
+  const availableSubtypes = useMemo(() => Array.from(new Set(
+    cards
+      .filter((card) => (filter === "all" || card.type === filter) && card.subtype.trim())
+      .map((card) => card.subtype.trim())
+  )).sort((a, b) => a.localeCompare(b, "ru")), [cards, filter]);
+
   const visibleCards = useMemo(() => cards.filter((card) => {
-    const searchable = `${card.title} ${card.excerpt} ${card.tags.join(" ")}`.toLowerCase();
-    return (filter === "all" || card.type === filter) && searchable.includes(query.toLowerCase());
-  }), [cards, filter, query]);
+    const rawQuery = query.trim();
+    const normalizedQuery = rawQuery.toLocaleLowerCase("ru-RU");
+    const isTagQuery = rawQuery.startsWith("#");
+    const tagQuery = normalizedQuery.slice(1).trim();
+    const searchable = `${card.title} ${card.subtype} ${card.excerpt} ${card.tags.join(" ")}`.toLocaleLowerCase("ru-RU");
+    const queryMatches = isTagQuery
+      ? card.tags.some((tag) => tag.toLocaleLowerCase("ru-RU") === tagQuery)
+      : searchable.includes(normalizedQuery);
+    return (filter === "all" || card.type === filter)
+      && (subtypeFilter === "all" || normalizeTitle(card.subtype) === normalizeTitle(subtypeFilter))
+      && queryMatches;
+  }), [cards, filter, subtypeFilter, query]);
+
+  const selectedBacklinks = useMemo(() => {
+    if (!selectedCard) return [] as Card[];
+    const title = normalizeTitle(selectedCard.title);
+    return cards.filter((card) => card.id !== selectedCard.id && (
+      card.relations.includes(selectedCard.id)
+      || wikiTargets(card.content).some((target) => normalizeTitle(target) === title)
+    ));
+  }, [cards, selectedCard]);
+
+  const focusTag = (tag: string) => {
+    setQuery(`#${tag}`);
+    setFilter("all");
+    setSubtypeFilter("all");
+    setView("library");
+  };
 
   const clearMapSelection = () => {
     setSelectedMarkerId(null);
@@ -761,9 +843,10 @@ export function AtlasApp({ adminMode = false }: { adminMode?: boolean }) {
         <button className={view === "library" ? "active" : ""} onClick={() => setView("library")}>▤ Библиотека <span>{cards.length}</span></button>
         <button className={view === "timeline" ? "active" : ""} onClick={() => setView("timeline")}>⌁ Таймлайн <span>{timeline.length}</span></button>
       </nav>
-      <div className="sidebar-intro"><span className="eyebrow">Сделано Сержом за шавуху и энергос</span><p>{adminMode ? "Редактор карт и связанной wiki." : "Живой атлас мест, людей, событий и тайн."}</p></div>
+      <div className="sidebar-intro"><span className="eyebrow">Мир Эйры</span><p>{adminMode ? "Редактор карт и связанной wiki." : "Живой атлас мест, людей, событий и тайн."}</p></div>
       <div className="search-box"><span>⌕</span><input placeholder="Искать в энциклопедии" value={query} onChange={(event) => setQuery(event.target.value)} /><kbd>⌘K</kbd></div>
-      <div className="filter-row"><button className={filter === "all" ? "active" : ""} onClick={() => setFilter("all")}>Все <span>{cards.length}</span></button>{Object.entries(typeMeta).map(([key, meta]) => <button key={key} className={filter === key ? "active" : ""} onClick={() => setFilter(key as CardType)}>{meta.icon} <span>{meta.label}</span></button>)}</div>
+      <div className="filter-row"><button className={filter === "all" ? "active" : ""} onClick={() => { setFilter("all"); setSubtypeFilter("all"); }}>Все <span>{cards.length}</span></button>{Object.entries(typeMeta).map(([key, meta]) => <button key={key} className={filter === key ? "active" : ""} onClick={() => { setFilter(key as CardType); setSubtypeFilter("all"); }}>{meta.icon} <span>{meta.label}</span></button>)}</div>
+      {availableSubtypes.length > 0 && <div className="subtype-row"><button className={subtypeFilter === "all" ? "active" : ""} onClick={() => setSubtypeFilter("all")}>Все подтипы</button>{availableSubtypes.map((subtype) => <button key={subtype} className={subtypeFilter === subtype ? "active" : ""} onClick={() => setSubtypeFilter(subtype)}>{subtype}</button>)}</div>}
 
       {view === "map" && <section className="map-list-panel">
         <div className="side-section-title">Карты <span>{maps.length}</span></div>
@@ -776,7 +859,7 @@ export function AtlasApp({ adminMode = false }: { adminMode?: boolean }) {
         {adminMode && <button className="create-map-button" onClick={() => void addMap()}>+ Добавить карту</button>}
       </section>}
 
-      <div className="card-list">{visibleCards.slice(0, view === "library" ? cards.length : 10).map((card) => <button key={card.id} onClick={() => openCard(card)} className={`list-card ${selectedCardId === card.id ? "selected" : ""}`}><span className="list-icon" style={{ background: card.cover_color }}>{typeMeta[card.type].icon}</span><span><b>{card.title}</b><small>{typeMeta[card.type].label}</small></span><i>→</i></button>)}{!visibleCards.length && <p className="empty">Ничего не найдено</p>}</div>
+      <div className="card-list">{visibleCards.slice(0, view === "library" ? cards.length : 10).map((card) => <button key={card.id} onClick={() => openCard(card)} className={`list-card ${selectedCardId === card.id ? "selected" : ""}`}><span className="list-icon" style={{ background: card.cover_color }}>{typeMeta[card.type].icon}</span><span><b>{card.title}</b><small>{cardKind(card)}</small></span><i>→</i></button>)}{!visibleCards.length && <p className="empty">Ничего не найдено</p>}</div>
 
       {adminMode && map && view === "map" && <section className="map-assets">
         <div className="side-section-title">Регионы <span>{map.regions.length}</span></div>
@@ -785,7 +868,7 @@ export function AtlasApp({ adminMode = false }: { adminMode?: boolean }) {
         {map.overlays.map((overlay) => <div className="asset-row" key={overlay.id}><button className="asset-open" onClick={() => { setSelectedOverlayId(overlay.id); setSelectedRegionId(null); }}><img src={overlay.image_url} alt="" /><b>{overlay.label || overlay.card_title || "Изображение"}</b></button><button title="Удалить объект" onClick={() => { if (confirm("Удалить объект с карты?")) void deleteOverlay(overlay.id); }}>×</button></div>)}
         <div className="map-danger-zone"><button className="text-button danger-text" disabled={maps.length <= 1} onClick={() => void deleteCurrentMap()}>Удалить эту карту</button></div>
       </section>}
-      <footer><span>{adminMode ? "Доступ: хранитель" : "Только просмотр"}</span><span>•</span><span>v0.6</span></footer>
+      <footer><span>{adminMode ? "Доступ: хранитель" : "Только просмотр"}</span><span>•</span><span>v0.7</span></footer>
     </aside>
 
     <div className="content-area">
@@ -805,7 +888,7 @@ export function AtlasApp({ adminMode = false }: { adminMode?: boolean }) {
         onOverlayResizePreview={previewResize} onOverlayResizeCommit={commitResize} onRegionPreview={previewRegion} onRegionCommit={commitRegionPoints}
         onMapImageUpload={uploadMapImage} onOverlayUpload={uploadOverlay} onEditMapDetails={() => void editMapDetails()}
       />}
-      {view === "library" && <LibraryView cards={visibleCards} onSelect={openCard} />}
+      {view === "library" && <LibraryView cards={visibleCards} onSelect={openCard} onTag={focusTag} title={query.trim().startsWith("#") ? `Тег #${query.trim().slice(1)}` : undefined} description={query.trim().startsWith("#") ? "Все статьи, отмеченные этим тегом." : undefined} />}
       {view === "timeline" && <TimelineView events={timeline} onSelect={(id) => { const card = cards.find((item) => item.id === id); if (card) openCard(card); }} />}
     </div>
 
@@ -813,11 +896,12 @@ export function AtlasApp({ adminMode = false }: { adminMode?: boolean }) {
       {selectedCard ? <>
         <div className="article-cover" style={{ background: selectedCard.cover_image_url ? `linear-gradient(180deg, rgba(16,14,20,.08), rgba(20,18,27,.95)), url("${selectedCard.cover_image_url}") center/cover` : `radial-gradient(circle at 25% 15%, rgba(255,255,255,.55), transparent 30%), linear-gradient(145deg, ${selectedCard.cover_color}, #191720 72%)` }}><span>{typeMeta[selectedCard.type].icon}</span><button className="icon-button" onClick={() => { setSelectedCardId(null); setSelectedMarkerId(null); }}>×</button></div>
         <div className="article-scroll"><div className="article-body">
-          <div className="article-meta"><span>{typeMeta[selectedCard.type].label}</span><time>обновлено {formatDate(selectedCard.updated_at)}</time></div>
-          <h2>{selectedCard.title}</h2><p className="lead">{selectedCard.excerpt}</p><div className="tags">{selectedCard.tags.map((tag) => <span key={tag}>#{tag}</span>)}</div>
-          <MarkdownView content={selectedCard.content} />
+          <div className="article-meta"><span>{cardKind(selectedCard)}</span><time>обновлено {formatDate(selectedCard.updated_at)}</time></div>
+          <h2>{selectedCard.title}</h2><p className="lead">{selectedCard.excerpt}</p><div className="tags">{selectedCard.tags.map((tag) => <button type="button" key={tag} onClick={() => focusTag(tag)}>#{tag}</button>)}</div>
+          <MarkdownView content={selectedCard.content} cards={cards} onOpenCard={openCard} onTag={focusTag} />
           {placements.length > 0 && <section className="relations map-links"><h3>На картах</h3>{placements.map((placement) => <button key={`${placement.kind}-${placement.object_id}`} onClick={() => void focusPlacement(placement)}><span className="map-link-icon">{placement.kind === "marker" ? "⌖" : placement.kind === "region" ? "⬡" : "▧"}</span><span><b>{placement.map_title}</b><small>{placement.label || (placement.kind === "marker" ? "Метка" : placement.kind === "region" ? "Регион" : "Карточка")}</small></span><i>↗</i></button>)}</section>}
-          {selectedCard.relations.length > 0 && <section className="relations"><h3>Связанные записи</h3>{selectedCard.relations.map((id) => { const item = cards.find((card) => card.id === id); return item ? <button key={id} onClick={() => openCard(item)}><span style={{ background: item.cover_color }}>{typeMeta[item.type].icon}</span>{item.title}<i>→</i></button> : null; })}</section>}
+          {selectedBacklinks.length > 0 && <section className="relations backlinks"><h3>Упоминается в</h3>{selectedBacklinks.map((item) => <button key={item.id} onClick={() => openCard(item)} title={item.excerpt}><span style={{ background: item.cover_color }}>{typeMeta[item.type].icon}</span><span className="relation-copy"><b>{item.title}</b><small>{cardKind(item)}</small></span><i>→</i></button>)}</section>}
+          {selectedCard.relations.length > 0 && <section className="relations"><h3>Связанные записи</h3>{selectedCard.relations.map((id) => { const item = cards.find((card) => card.id === id); return item ? <button key={id} onClick={() => openCard(item)}><span style={{ background: item.cover_color }}>{typeMeta[item.type].icon}</span><span className="relation-copy"><b>{item.title}</b><small>{cardKind(item)}</small></span><i>→</i></button> : null; })}</section>}
         </div></div>
         {adminMode && <div className="article-actions"><button className="ghost-button" onClick={() => setEditingCard(selectedCard)}>Изменить статью</button>{selectedMarker && <button className="text-button danger-text" onClick={() => { if (confirm("Удалить эту метку с карты?")) void deleteSelectedMarker(); }}>Удалить метку</button>}</div>}
       </> : <div className="article-empty"><div className="compass">✦</div><h2>Выберите точку мира</h2><p>Нажмите на метку, карточку на карте, статью из библиотеки или событие таймлайна.</p></div>}

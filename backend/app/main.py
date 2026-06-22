@@ -7,6 +7,7 @@ import json
 import os
 import secrets
 import shutil
+import re
 import sqlite3
 import time
 import uuid
@@ -32,7 +33,7 @@ TOKEN_TTL_SECONDS = int(os.getenv("TOKEN_TTL_SECONDS", str(60 * 60 * 24 * 7)))
 CORS_ORIGINS = [item.strip() for item in os.getenv("CORS_ORIGINS", "*").split(",") if item.strip()]
 ALLOWED_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 
-app = FastAPI(title="Timur Gandon API", version="0.6.0")
+app = FastAPI(title="Timur Gandon API", version="0.7.1")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS or ["*"],
@@ -48,6 +49,7 @@ CardType = Literal["location", "person", "faction", "artifact", "event"]
 class CardInput(BaseModel):
     title: str = Field(min_length=2, max_length=120)
     type: CardType
+    subtype: str = Field(default="", max_length=80)
     excerpt: str = Field(default="", max_length=500)
     content: str = Field(default="")
     cover_color: str = Field(default="#A8C7FF", pattern=r"^#[0-9A-Fa-f]{6}$")
@@ -128,9 +130,25 @@ def ensure_column(conn: sqlite3.Connection, table: str, column: str, definition:
 
 def row_to_card(row: sqlite3.Row) -> dict:
     card = dict(row)
+    card["subtype"] = (card.get("subtype") or "").strip()
     card["tags"] = json.loads(card.pop("tags_json") or "[]")
     card["relations"] = json.loads(card.pop("relations_json") or "[]")
     return card
+
+
+def rewrite_wiki_references(conn: sqlite3.Connection, old_title: str, new_title: str, excluded_card_id: int) -> None:
+    """Keep simple [[Title]] wiki links usable when an article is renamed."""
+    old_title = old_title.strip()
+    new_title = new_title.strip()
+    if not old_title or old_title.casefold() == new_title.casefold():
+        return
+    pattern = re.compile(r"\[\[\s*" + re.escape(old_title) + r"(\s*(?:\|[^\]]*)?)\]\]", re.IGNORECASE)
+    rows = conn.execute("SELECT id, content FROM cards WHERE id != ?", (excluded_card_id,)).fetchall()
+    for row in rows:
+        content = row["content"] or ""
+        updated = pattern.sub(lambda match: f"[[{new_title}{match.group(1)}]]", content)
+        if updated != content:
+            conn.execute("UPDATE cards SET content = ?, updated_at = ? WHERE id = ?", (updated, now(), row["id"]))
 
 
 def signed_token() -> tuple[str, int]:
@@ -162,6 +180,62 @@ def require_admin(authorization: str | None = Header(default=None)) -> dict:
     return parse_token(authorization.split(" ", 1)[1])
 
 
+def _has_existing_world_data(conn: sqlite3.Connection) -> bool:
+    """Return True when this database has already been used at least once.
+
+    Older versions created demo rows whenever an individual table became empty.
+    That made deleted demo markers reappear after a restart.  Bootstrap is now
+    decided once for the entire world, not per table.
+    """
+    for table in ("cards", "maps", "markers", "regions", "map_overlays", "timeline_events"):
+        if conn.execute(f"SELECT EXISTS(SELECT 1 FROM {table} LIMIT 1) AS present").fetchone()["present"]:
+            return True
+    return False
+
+
+def _seed_demo_world(conn: sqlite3.Connection) -> None:
+    """Create the optional starter world for a brand-new, empty database only."""
+    seed_cards = [
+        ("Астэрская обсерватория", "location", "Старая башня на краю Солёного моря. Ночью её линзы ловят свет исчезнувших звёзд.", "## История\nОбсерватория была построена до Раскола, когда моря ещё не существовало.\n\n## Сегодня\nВнутри живут хранители карт и наблюдатели приливов. Никто не знает, почему маяк продолжает работать.", "#9FB9FF", ["Север", "Башня", "Тайна"], [2, 3]),
+        ("Мира Вальд", "person", "Картограф, которая вернулась из Пепельных земель с картой, которой не должно существовать.", "## Портрет\nМира собирает маршруты исчезнувших экспедиций. Она уверена, что каждая карта — это договор с местом.\n\n## Связи\nПоследний раз её видели у Обсерватории вместе с представителем Конклава.", "#F6C178", ["Картограф", "Исследователь"], [1, 3]),
+        ("Конклав тумана", "faction", "Закрытый союз дипломатов и архивистов, охраняющий запретные маршруты между островами.", "## Цель\nКонклав контролирует доступ к старым путям и стирает сведения о тех, кто нарушает договоры.\n\n## Символ\nТри кольца, пересечённые тонкой линией горизонта.", "#C69CFF", ["Фракция", "Архив", "Политика"], [1, 2]),
+        ("Сердце прилива", "artifact", "Кристалл, который меняет направление воды в радиусе одного дня пути.", "## Свойства\nАртефакт реагирует на клятвы, произнесённые над водой. Его нельзя взять силой: он становится тяжёлым, как якорь.\n\n## Последнее известное место\nРуины на южном берегу Солёного моря.", "#72D8C5", ["Артефакт", "Море"], [1, 3]),
+        ("Ночь без прилива", "event", "Однажды море остановилось на девять часов, открыв древние улицы под водой.", "## Событие\nЖители прибрежных городов спустились к старым воротам, но вернулись не все. С тех пор Ночь без прилива отмечают молчанием.", "#F58BB2", ["История", "Катастрофа"], [1, 4]),
+    ]
+    for card in seed_cards:
+        conn.execute(
+            """INSERT INTO cards(title,type,excerpt,content,cover_color,tags_json,relations_json,created_at,updated_at)
+            VALUES(?,?,?,?,?,?,?,?,?)""",
+            (*card[:5], json.dumps(card[5], ensure_ascii=False), json.dumps(card[6]), now(), now()),
+        )
+
+    cursor = conn.execute(
+        "INSERT INTO maps(title,subtitle,image_url,created_at,updated_at) VALUES(?,?,?,?,?)",
+        ("Пределы Эйры", "Карты западного побережья и внутренних земель", None, now(), now()),
+    )
+    map_id = cursor.lastrowid
+    card_rows = conn.execute("SELECT id FROM cards ORDER BY id LIMIT 5").fetchall()
+    marker_positions = [
+        (57, 32, "Обсерватория"),
+        (34, 46, "Мира"),
+        (47, 58, "Конклав"),
+        (71, 66, "Сердце прилива"),
+        (21, 67, "Ночь без прилива"),
+    ]
+    for card_row, (x, y, label) in zip(card_rows, marker_positions):
+        conn.execute(
+            "INSERT INTO markers(map_id,card_id,x,y,label,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+            (map_id, card_row["id"], x, y, label, now(), now()),
+        )
+
+    event_id = conn.execute("SELECT id FROM cards WHERE type = 'event' ORDER BY id LIMIT 1").fetchone()
+    if event_id:
+        conn.execute(
+            "INSERT INTO timeline_events(card_id,sort_year,date_label,description,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+            (event_id["id"], -132, "132 года до Раскола", "Море остановилось на девять часов, открыв древние улицы под водой.", now(), now()),
+        )
+
+
 def init_db() -> None:
     with db() as conn:
         conn.executescript(
@@ -170,6 +244,7 @@ def init_db() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 title TEXT NOT NULL,
                 type TEXT NOT NULL,
+                subtype TEXT NOT NULL DEFAULT '',
                 excerpt TEXT NOT NULL DEFAULT '',
                 content TEXT NOT NULL DEFAULT '',
                 cover_color TEXT NOT NULL DEFAULT '#A8C7FF',
@@ -238,43 +313,33 @@ def init_db() -> None:
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY(card_id) REFERENCES cards(id)
             );
+            CREATE TABLE IF NOT EXISTS app_metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             """
         )
         ensure_column(conn, "cards", "cover_image_url", "TEXT")
+        ensure_column(conn, "cards", "subtype", "TEXT NOT NULL DEFAULT ''")
         ensure_column(conn, "maps", "image_aspect_ratio", "REAL")
         ensure_column(conn, "map_overlays", "card_id", "INTEGER")
         ensure_column(conn, "map_overlays", "display_type", "TEXT NOT NULL DEFAULT 'illustration'")
         ensure_column(conn, "map_overlays", "aspect_ratio", "REAL NOT NULL DEFAULT 1.5")
-        existing = conn.execute("SELECT COUNT(*) AS count FROM cards").fetchone()["count"]
-        if existing == 0:
-            seed_cards = [
-                ("Астэрская обсерватория", "location", "Старая башня на краю Солёного моря. Ночью её линзы ловят свет исчезнувших звёзд.", "## История\nОбсерватория была построена до Раскола, когда моря ещё не существовало.\n\n## Сегодня\nВнутри живут хранители карт и наблюдатели приливов. Никто не знает, почему маяк продолжает работать.", "#9FB9FF", ["Север", "Башня", "Тайна"], [2, 3]),
-                ("Мира Вальд", "person", "Картограф, которая вернулась из Пепельных земель с картой, которой не должно существовать.", "## Портрет\nМира собирает маршруты исчезнувших экспедиций. Она уверена, что каждая карта — это договор с местом.\n\n## Связи\nПоследний раз её видели у Обсерватории вместе с представителем Конклава.", "#F6C178", ["Картограф", "Исследователь"], [1, 3]),
-                ("Конклав тумана", "faction", "Закрытый союз дипломатов и архивистов, охраняющий запретные маршруты между островами.", "## Цель\nКонклав контролирует доступ к старым путям и стирает сведения о тех, кто нарушает договоры.\n\n## Символ\nТри кольца, пересечённые тонкой линией горизонта.", "#C69CFF", ["Фракция", "Архив", "Политика"], [1, 2]),
-                ("Сердце прилива", "artifact", "Кристалл, который меняет направление воды в радиусе одного дня пути.", "## Свойства\nАртефакт реагирует на клятвы, произнесённые над водой. Его нельзя взять силой: он становится тяжёлым, как якорь.\n\n## Последнее известное место\nРуины на южном берегу Солёного моря.", "#72D8C5", ["Артефакт", "Море"], [1, 3]),
-                ("Ночь без прилива", "event", "Однажды море остановилось на девять часов, открыв древние улицы под водой.", "## Событие\nЖители прибрежных городов спустились к старым воротам, но вернулись не все. С тех пор Ночь без прилива отмечают молчанием.", "#F58BB2", ["История", "Катастрофа"], [1, 4]),
-            ]
-            for card in seed_cards:
-                conn.execute(
-                    """INSERT INTO cards(title,type,excerpt,content,cover_color,tags_json,relations_json,created_at,updated_at)
-                    VALUES(?,?,?,?,?,?,?,?,?)""",
-                    (*card[:5], json.dumps(card[5], ensure_ascii=False), json.dumps(card[6]), now(), now()),
-                )
-        if conn.execute("SELECT COUNT(*) AS count FROM maps").fetchone()["count"] == 0:
-            conn.execute("INSERT INTO maps(title,subtitle,image_url,created_at,updated_at) VALUES(?,?,?,?,?)", ("Пределы Эйры", "Карты западного побережья и внутренних земель", None, now(), now()))
-        if conn.execute("SELECT COUNT(*) AS count FROM markers").fetchone()["count"] == 0:
-            # Do not assume card ids start at 1: an existing SQLite file can keep
-            # AUTOINCREMENT counters after all demo cards were deleted.
-            map_row = conn.execute("SELECT id FROM maps ORDER BY id LIMIT 1").fetchone()
-            card_rows = conn.execute("SELECT id FROM cards ORDER BY id LIMIT 5").fetchall()
-            marker_positions = [(57, 32, "Обсерватория"), (34, 46, "Мира"), (47, 58, "Конклав"), (71, 66, "Сердце прилива"), (21, 67, "Ночь без прилива")]
-            if map_row and len(card_rows) == len(marker_positions):
-                for card_row, (x, y, label) in zip(card_rows, marker_positions):
-                    conn.execute("INSERT INTO markers(map_id,card_id,x,y,label,created_at,updated_at) VALUES(?,?,?,?,?,?,?)", (map_row["id"], card_row["id"], x, y, label, now(), now()))
-        if conn.execute("SELECT COUNT(*) AS count FROM timeline_events").fetchone()["count"] == 0:
-            event_id = conn.execute("SELECT id FROM cards WHERE type = 'event' ORDER BY id LIMIT 1").fetchone()
-            if event_id:
-                conn.execute("INSERT INTO timeline_events(card_id,sort_year,date_label,description,created_at,updated_at) VALUES(?,?,?,?,?,?)", (event_id["id"], -132, "132 года до Раскола", "Море остановилось на девять часов, открыв древние улицы под водой.", now(), now()))
+
+        bootstrap_state = conn.execute(
+            "SELECT value FROM app_metadata WHERE key = 'demo_bootstrap_completed'"
+        ).fetchone()
+        if bootstrap_state is None:
+            # For a legacy database, any existing world content means the owner has
+            # already started work.  Mark it as initialized but never insert demo
+            # content into empty child tables again.
+            if not _has_existing_world_data(conn):
+                _seed_demo_world(conn)
+            conn.execute(
+                "INSERT INTO app_metadata(key,value,updated_at) VALUES(?,?,?)",
+                ("demo_bootstrap_completed", "1", now()),
+            )
 
 
 @app.on_event("startup")
@@ -284,7 +349,7 @@ def on_startup() -> None:
 
 @app.get("/health")
 def health():
-    return {"ok": True, "service": "atlas-forge-api", "version": "0.6.0"}
+    return {"ok": True, "service": "atlas-forge-api", "version": "0.7.1"}
 
 
 @app.post("/api/auth/login")
@@ -301,17 +366,20 @@ def auth_me(_: dict = Depends(require_admin)):
 
 
 @app.get("/api/cards")
-def list_cards(q: str | None = None, type: CardType | None = None):
+def list_cards(q: str | None = None, type: CardType | None = None, subtype: str | None = None):
     query = "SELECT * FROM cards"
     clauses: list[str] = []
     values: list[str] = []
     if q:
-        clauses.append("(title LIKE ? OR excerpt LIKE ? OR tags_json LIKE ?)")
+        clauses.append("(title LIKE ? OR subtype LIKE ? OR excerpt LIKE ? OR tags_json LIKE ?)")
         search = f"%{q}%"
-        values.extend([search, search, search])
+        values.extend([search, search, search, search])
     if type:
         clauses.append("type = ?")
         values.append(type)
+    if subtype:
+        clauses.append("LOWER(subtype) = LOWER(?)")
+        values.append(subtype.strip())
     if clauses:
         query += " WHERE " + " AND ".join(clauses)
     query += " ORDER BY updated_at DESC"
@@ -364,9 +432,9 @@ def create_card(payload: CardInput, _: dict = Depends(require_admin)):
     stamp = now()
     with db() as conn:
         cursor = conn.execute(
-            """INSERT INTO cards(title,type,excerpt,content,cover_color,cover_image_url,tags_json,relations_json,created_at,updated_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?)""",
-            (payload.title, payload.type, payload.excerpt, payload.content, payload.cover_color, payload.cover_image_url, json.dumps(payload.tags, ensure_ascii=False), json.dumps(payload.relations), stamp, stamp),
+            """INSERT INTO cards(title,type,subtype,excerpt,content,cover_color,cover_image_url,tags_json,relations_json,created_at,updated_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+            (payload.title.strip(), payload.type, payload.subtype.strip(), payload.excerpt, payload.content, payload.cover_color, payload.cover_image_url, json.dumps(payload.tags, ensure_ascii=False), json.dumps(payload.relations), stamp, stamp),
         )
         row = conn.execute("SELECT * FROM cards WHERE id = ?", (cursor.lastrowid,)).fetchone()
     return row_to_card(row)
@@ -375,12 +443,15 @@ def create_card(payload: CardInput, _: dict = Depends(require_admin)):
 @app.patch("/api/cards/{card_id}")
 def update_card(card_id: int, payload: CardInput, _: dict = Depends(require_admin)):
     with db() as conn:
-        if not conn.execute("SELECT id FROM cards WHERE id = ?", (card_id,)).fetchone():
+        existing = conn.execute("SELECT id, title FROM cards WHERE id = ?", (card_id,)).fetchone()
+        if not existing:
             raise HTTPException(404, "Карточка не найдена")
+        clean_title = payload.title.strip()
         conn.execute(
-            """UPDATE cards SET title=?, type=?, excerpt=?, content=?, cover_color=?, cover_image_url=?, tags_json=?, relations_json=?, updated_at=? WHERE id=?""",
-            (payload.title, payload.type, payload.excerpt, payload.content, payload.cover_color, payload.cover_image_url, json.dumps(payload.tags, ensure_ascii=False), json.dumps(payload.relations), now(), card_id),
+            """UPDATE cards SET title=?, type=?, subtype=?, excerpt=?, content=?, cover_color=?, cover_image_url=?, tags_json=?, relations_json=?, updated_at=? WHERE id=?""",
+            (clean_title, payload.type, payload.subtype.strip(), payload.excerpt, payload.content, payload.cover_color, payload.cover_image_url, json.dumps(payload.tags, ensure_ascii=False), json.dumps(payload.relations), now(), card_id),
         )
+        rewrite_wiki_references(conn, existing["title"], clean_title, card_id)
         row = conn.execute("SELECT * FROM cards WHERE id = ?", (card_id,)).fetchone()
     return row_to_card(row)
 
@@ -434,7 +505,7 @@ def get_map(map_id: int):
         if not map_row:
             raise HTTPException(404, "Карта не найдена")
         marker_rows = conn.execute(
-            """SELECT markers.*, cards.title AS card_title, cards.type AS card_type, cards.cover_color AS card_color
+            """SELECT markers.*, cards.title AS card_title, cards.type AS card_type, cards.subtype AS card_subtype, cards.cover_color AS card_color
             FROM markers JOIN cards ON cards.id = markers.card_id WHERE markers.map_id = ? ORDER BY markers.id""",
             (map_id,),
         ).fetchall()
@@ -444,7 +515,7 @@ def get_map(map_id: int):
             (map_id,),
         ).fetchall()
         overlay_rows = conn.execute(
-            """SELECT map_overlays.*, cards.title AS card_title, cards.type AS card_type,
+            """SELECT map_overlays.*, cards.title AS card_title, cards.type AS card_type, cards.subtype AS card_subtype,
             cards.cover_color AS card_color FROM map_overlays
             LEFT JOIN cards ON cards.id = map_overlays.card_id
             WHERE map_overlays.map_id = ? ORDER BY map_overlays.id""",
@@ -495,7 +566,7 @@ def create_marker(map_id: int, payload: MarkerInput, _: dict = Depends(require_a
         if not conn.execute("SELECT id FROM cards WHERE id = ?", (payload.card_id,)).fetchone():
             raise HTTPException(404, "Карточка не найдена")
         cursor = conn.execute("INSERT INTO markers(map_id,card_id,x,y,label,created_at,updated_at) VALUES(?,?,?,?,?,?,?)", (map_id, payload.card_id, payload.x, payload.y, payload.label, stamp, stamp))
-        row = conn.execute("""SELECT markers.*, cards.title AS card_title, cards.type AS card_type, cards.cover_color AS card_color FROM markers JOIN cards ON cards.id = markers.card_id WHERE markers.id = ?""", (cursor.lastrowid,)).fetchone()
+        row = conn.execute("""SELECT markers.*, cards.title AS card_title, cards.type AS card_type, cards.subtype AS card_subtype, cards.cover_color AS card_color FROM markers JOIN cards ON cards.id = markers.card_id WHERE markers.id = ?""", (cursor.lastrowid,)).fetchone()
     return dict(row)
 
 
@@ -505,7 +576,7 @@ def update_marker(map_id: int, marker_id: int, payload: MarkerInput, _: dict = D
         if not conn.execute("SELECT id FROM markers WHERE id = ? AND map_id = ?", (marker_id, map_id)).fetchone():
             raise HTTPException(404, "Метка не найдена")
         conn.execute("UPDATE markers SET card_id=?, x=?, y=?, label=?, updated_at=? WHERE id=?", (payload.card_id, payload.x, payload.y, payload.label, now(), marker_id))
-        row = conn.execute("""SELECT markers.*, cards.title AS card_title, cards.type AS card_type, cards.cover_color AS card_color FROM markers JOIN cards ON cards.id = markers.card_id WHERE markers.id = ?""", (marker_id,)).fetchone()
+        row = conn.execute("""SELECT markers.*, cards.title AS card_title, cards.type AS card_type, cards.subtype AS card_subtype, cards.cover_color AS card_color FROM markers JOIN cards ON cards.id = markers.card_id WHERE markers.id = ?""", (marker_id,)).fetchone()
     return dict(row)
 
 
@@ -560,7 +631,7 @@ def create_overlay(map_id: int, payload: OverlayInput, _: dict = Depends(require
             (map_id, payload.image_url, payload.x, payload.y, payload.width, payload.aspect_ratio, payload.label, payload.card_id, payload.display_type, stamp, stamp),
         )
         row = conn.execute(
-            """SELECT map_overlays.*, cards.title AS card_title, cards.type AS card_type,
+            """SELECT map_overlays.*, cards.title AS card_title, cards.type AS card_type, cards.subtype AS card_subtype,
             cards.cover_color AS card_color FROM map_overlays
             LEFT JOIN cards ON cards.id = map_overlays.card_id WHERE map_overlays.id = ?""",
             (cursor.lastrowid,),
@@ -580,7 +651,7 @@ def update_overlay(map_id: int, overlay_id: int, payload: OverlayInput, _: dict 
             (payload.image_url, payload.x, payload.y, payload.width, payload.aspect_ratio, payload.label, payload.card_id, payload.display_type, now(), overlay_id),
         )
         row = conn.execute(
-            """SELECT map_overlays.*, cards.title AS card_title, cards.type AS card_type,
+            """SELECT map_overlays.*, cards.title AS card_title, cards.type AS card_type, cards.subtype AS card_subtype,
             cards.cover_color AS card_color FROM map_overlays
             LEFT JOIN cards ON cards.id = map_overlays.card_id WHERE map_overlays.id = ?""",
             (overlay_id,),
@@ -601,7 +672,7 @@ def get_timeline():
     with db() as conn:
         rows = conn.execute(
             """SELECT timeline_events.*, cards.title AS card_title, cards.type AS card_type,
-            cards.cover_color AS card_color, cards.cover_image_url AS card_image_url
+            cards.subtype AS card_subtype, cards.cover_color AS card_color, cards.cover_image_url AS card_image_url
             FROM timeline_events JOIN cards ON cards.id = timeline_events.card_id
             ORDER BY sort_year, timeline_events.id"""
         ).fetchall()

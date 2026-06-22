@@ -147,3 +147,8 @@ NEXT_PUBLIC_API_URL=https://ВАШ-BACKEND.up.railway.app
 ```text
 CORS_ORIGINS=https://ВАШ-FRONTEND.up.railway.app
 ```
+
+
+## v0.7.1 hotfix
+
+Demo content is bootstrapped only once for a new database. Deleting all markers no longer causes the backend to recreate the starter markers after restart.
