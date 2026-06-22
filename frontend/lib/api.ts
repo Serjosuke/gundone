@@ -19,12 +19,20 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (adminToken) headers.set("Authorization", `Bearer ${adminToken}`);
   const response = await fetch(`${BASE}${path}`, { ...init, headers });
   if (!response.ok) {
+    const raw = await response.text();
     let detail = "Не удалось выполнить запрос";
-    try {
-      const body = await response.json();
-      detail = body.detail || detail;
-    } catch {
-      detail = await response.text() || detail;
+    if (raw) {
+      try {
+        const body: unknown = JSON.parse(raw);
+        if (typeof body === "object" && body !== null) {
+          const record = body as Record<string, unknown>;
+          if (typeof record.detail === "string") detail = record.detail;
+          else if (typeof record.message === "string") detail = record.message;
+          else detail = raw;
+        } else detail = raw;
+      } catch {
+        detail = raw;
+      }
     }
     throw new Error(detail);
   }
@@ -47,8 +55,8 @@ export const api = {
   placements: (cardId: number) => request<MapPlacement[]>(`/api/cards/${cardId}/placements`, { cache: "no-store" }),
   maps: () => request<MapSummary[]>("/api/maps", { cache: "no-store" }),
   map: (mapId: number) => request<MapPayload>(`/api/maps/${mapId}`, { cache: "no-store" }),
-  createMap: (body: Pick<MapPayload, "title" | "subtitle" | "image_url">) => request<MapPayload>("/api/maps", { method: "POST", body: JSON.stringify(body) }),
-  updateMap: (mapId: number, body: Pick<MapPayload, "title" | "subtitle" | "image_url">) => request<MapPayload>(`/api/maps/${mapId}`, { method: "PATCH", body: JSON.stringify(body) }),
+  createMap: (body: Pick<MapPayload, "title" | "subtitle" | "image_url" | "image_aspect_ratio">) => request<MapPayload>("/api/maps", { method: "POST", body: JSON.stringify(body) }),
+  updateMap: (mapId: number, body: Pick<MapPayload, "title" | "subtitle" | "image_url" | "image_aspect_ratio">) => request<MapPayload>(`/api/maps/${mapId}`, { method: "PATCH", body: JSON.stringify(body) }),
   deleteMap: (mapId: number) => request<void>(`/api/maps/${mapId}`, { method: "DELETE" }),
   createMarker: (mapId: number, body: { card_id: number; x: number; y: number; label?: string | null }) => request<Marker>(`/api/maps/${mapId}/markers`, { method: "POST", body: JSON.stringify(body) }),
   updateMarker: (mapId: number, id: number, body: { card_id: number; x: number; y: number; label?: string | null }) => request<Marker>(`/api/maps/${mapId}/markers/${id}`, { method: "PATCH", body: JSON.stringify(body) }),

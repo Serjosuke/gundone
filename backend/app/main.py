@@ -32,7 +32,7 @@ TOKEN_TTL_SECONDS = int(os.getenv("TOKEN_TTL_SECONDS", str(60 * 60 * 24 * 7)))
 CORS_ORIGINS = [item.strip() for item in os.getenv("CORS_ORIGINS", "*").split(",") if item.strip()]
 ALLOWED_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 
-app = FastAPI(title="Timur Gandon API", version="0.5.0")
+app = FastAPI(title="Timur Gandon API", version="0.6.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS or ["*"],
@@ -67,6 +67,7 @@ class MapInput(BaseModel):
     title: str = Field(min_length=2, max_length=120)
     subtitle: str = Field(default="", max_length=280)
     image_url: str | None = Field(default=None, max_length=1000)
+    image_aspect_ratio: float | None = Field(default=None, ge=0.25, le=4.0)
 
 
 class Point(BaseModel):
@@ -183,6 +184,7 @@ def init_db() -> None:
                 title TEXT NOT NULL,
                 subtitle TEXT NOT NULL DEFAULT '',
                 image_url TEXT,
+                image_aspect_ratio REAL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -239,6 +241,7 @@ def init_db() -> None:
             """
         )
         ensure_column(conn, "cards", "cover_image_url", "TEXT")
+        ensure_column(conn, "maps", "image_aspect_ratio", "REAL")
         ensure_column(conn, "map_overlays", "card_id", "INTEGER")
         ensure_column(conn, "map_overlays", "display_type", "TEXT NOT NULL DEFAULT 'illustration'")
         ensure_column(conn, "map_overlays", "aspect_ratio", "REAL NOT NULL DEFAULT 1.5")
@@ -260,9 +263,14 @@ def init_db() -> None:
         if conn.execute("SELECT COUNT(*) AS count FROM maps").fetchone()["count"] == 0:
             conn.execute("INSERT INTO maps(title,subtitle,image_url,created_at,updated_at) VALUES(?,?,?,?,?)", ("Пределы Эйры", "Карты западного побережья и внутренних земель", None, now(), now()))
         if conn.execute("SELECT COUNT(*) AS count FROM markers").fetchone()["count"] == 0:
-            markers = [(1, 1, 57, 32, "Обсерватория"), (1, 2, 34, 46, "Мира"), (1, 3, 47, 58, "Конклав"), (1, 4, 71, 66, "Сердце прилива"), (1, 5, 21, 67, "Ночь без прилива")]
-            for map_id, card_id, x, y, label in markers:
-                conn.execute("INSERT INTO markers(map_id,card_id,x,y,label,created_at,updated_at) VALUES(?,?,?,?,?,?,?)", (map_id, card_id, x, y, label, now(), now()))
+            # Do not assume card ids start at 1: an existing SQLite file can keep
+            # AUTOINCREMENT counters after all demo cards were deleted.
+            map_row = conn.execute("SELECT id FROM maps ORDER BY id LIMIT 1").fetchone()
+            card_rows = conn.execute("SELECT id FROM cards ORDER BY id LIMIT 5").fetchall()
+            marker_positions = [(57, 32, "Обсерватория"), (34, 46, "Мира"), (47, 58, "Конклав"), (71, 66, "Сердце прилива"), (21, 67, "Ночь без прилива")]
+            if map_row and len(card_rows) == len(marker_positions):
+                for card_row, (x, y, label) in zip(card_rows, marker_positions):
+                    conn.execute("INSERT INTO markers(map_id,card_id,x,y,label,created_at,updated_at) VALUES(?,?,?,?,?,?,?)", (map_row["id"], card_row["id"], x, y, label, now(), now()))
         if conn.execute("SELECT COUNT(*) AS count FROM timeline_events").fetchone()["count"] == 0:
             event_id = conn.execute("SELECT id FROM cards WHERE type = 'event' ORDER BY id LIMIT 1").fetchone()
             if event_id:
@@ -276,7 +284,7 @@ def on_startup() -> None:
 
 @app.get("/health")
 def health():
-    return {"ok": True, "service": "atlas-forge-api", "version": "0.5.0"}
+    return {"ok": True, "service": "atlas-forge-api", "version": "0.6.0"}
 
 
 @app.post("/api/auth/login")
@@ -410,8 +418,8 @@ def create_map(payload: MapInput, _: dict = Depends(require_admin)):
     stamp = now()
     with db() as conn:
         cursor = conn.execute(
-            "INSERT INTO maps(title,subtitle,image_url,created_at,updated_at) VALUES(?,?,?,?,?)",
-            (payload.title, payload.subtitle, payload.image_url, stamp, stamp),
+            "INSERT INTO maps(title,subtitle,image_url,image_aspect_ratio,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+            (payload.title, payload.subtitle, payload.image_url, payload.image_aspect_ratio, stamp, stamp),
         )
         row = conn.execute("SELECT * FROM maps WHERE id = ?", (cursor.lastrowid,)).fetchone()
     result = dict(row)
@@ -455,8 +463,8 @@ def update_map(map_id: int, payload: MapInput, _: dict = Depends(require_admin))
         if not conn.execute("SELECT id FROM maps WHERE id = ?", (map_id,)).fetchone():
             raise HTTPException(404, "Карта не найдена")
         conn.execute(
-            "UPDATE maps SET title=?, subtitle=?, image_url=?, updated_at=? WHERE id=?",
-            (payload.title, payload.subtitle, payload.image_url, now(), map_id),
+            "UPDATE maps SET title=?, subtitle=?, image_url=?, image_aspect_ratio=?, updated_at=? WHERE id=?",
+            (payload.title, payload.subtitle, payload.image_url, payload.image_aspect_ratio, now(), map_id),
         )
         row = conn.execute("SELECT * FROM maps WHERE id = ?", (map_id,)).fetchone()
     return dict(row)

@@ -127,36 +127,89 @@ function MapSurface({
   const illustrationFileRef = useRef<HTMLInputElement>(null);
   const cardFileRef = useRef<HTMLInputElement>(null);
   const [view, setView] = useState({ x: 0, y: 0, scale: 1 });
+  const [viewport, setViewport] = useState({ width: 0, height: 0 });
+  const [detectedAspect, setDetectedAspect] = useState<number | null>(null);
   const interaction = useRef<Interaction>(null);
   const moved = useRef(false);
 
-  useEffect(() => setView({ x: 0, y: 0, scale: 1 }), [map.id, map.image_url]);
+  const aspect = clamp(map.image_aspect_ratio || detectedAspect || 1.6, 0.25, 4);
+  const worldSize = useMemo(() => {
+    if (!viewport.width || !viewport.height) return { width: 1, height: 1 };
+    const viewportAspect = viewport.width / viewport.height;
+    return aspect >= viewportAspect
+      ? { width: viewport.width, height: viewport.width / aspect }
+      : { width: viewport.height * aspect, height: viewport.height };
+  }, [aspect, viewport]);
 
-  const pointFrom = (event: { clientX: number; clientY: number }) => {
+  useEffect(() => {
+    setView({ x: 0, y: 0, scale: 1 });
+    setDetectedAspect(null);
+  }, [map.id, map.image_url]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const update = () => {
+      const rect = canvas.getBoundingClientRect();
+      setViewport({ width: Math.max(0, rect.width), height: Math.max(0, rect.height) });
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(canvas);
+    return () => observer.disconnect();
+  }, []);
+
+  const pointFrom = (event: { clientX: number; clientY: number }, clampToBounds = true) => {
     const rect = canvasRef.current!.getBoundingClientRect();
+    const left = rect.left + rect.width / 2 + view.x - (worldSize.width * view.scale) / 2;
+    const top = rect.top + rect.height / 2 + view.y - (worldSize.height * view.scale) / 2;
+    const rawX = ((event.clientX - left) / Math.max(1, worldSize.width * view.scale)) * 100;
+    const rawY = ((event.clientY - top) / Math.max(1, worldSize.height * view.scale)) * 100;
     return {
-      x: clamp(((event.clientX - rect.left - view.x) / (rect.width * view.scale)) * 100, 0, 100),
-      y: clamp(((event.clientY - rect.top - view.y) / (rect.height * view.scale)) * 100, 0, 100),
+      x: clampToBounds ? clamp(rawX, 0, 100) : rawX,
+      y: clampToBounds ? clamp(rawY, 0, 100) : rawY,
+      inside: rawX >= 0 && rawX <= 100 && rawY >= 0 && rawY <= 100,
     };
   };
 
   const zoomTo = (nextScale: number, clientX?: number, clientY?: number) => {
     const rect = canvasRef.current?.getBoundingClientRect();
     setView((old) => {
-      const scale = clamp(nextScale, 0.72, 3);
+      const scale = clamp(nextScale, 0.6, 4);
       if (!rect || clientX === undefined || clientY === undefined) return { ...old, scale };
       const cursorX = clientX - rect.left;
       const cursorY = clientY - rect.top;
-      const worldX = (cursorX - old.x) / old.scale;
-      const worldY = (cursorY - old.y) / old.scale;
-      return { scale, x: cursorX - worldX * scale, y: cursorY - worldY * scale };
+      const oldCenterX = rect.width / 2 + old.x;
+      const oldCenterY = rect.height / 2 + old.y;
+      const worldOffsetX = (cursorX - oldCenterX) / old.scale;
+      const worldOffsetY = (cursorY - oldCenterY) / old.scale;
+      return {
+        scale,
+        x: cursorX - rect.width / 2 - worldOffsetX * scale,
+        y: cursorY - rect.height / 2 - worldOffsetY * scale,
+      };
     });
   };
 
   const onWheel = (event: WheelEvent<HTMLDivElement>) => {
     event.preventDefault();
-    const multiplier = Math.exp(-event.deltaY * 0.0014);
-    zoomTo(view.scale * multiplier, event.clientX, event.clientY);
+    const multiplier = Math.exp(-event.deltaY * 0.00135);
+    setView((old) => {
+      const rect = canvasRef.current?.getBoundingClientRect();
+      if (!rect) return old;
+      const scale = clamp(old.scale * multiplier, 0.6, 4);
+      const cursorX = event.clientX - rect.left;
+      const cursorY = event.clientY - rect.top;
+      const oldCenterX = rect.width / 2 + old.x;
+      const oldCenterY = rect.height / 2 + old.y;
+      const worldOffsetX = (cursorX - oldCenterX) / old.scale;
+      const worldOffsetY = (cursorY - oldCenterY) / old.scale;
+      return {
+        scale,
+        x: cursorX - rect.width / 2 - worldOffsetX * scale,
+        y: cursorY - rect.height / 2 - worldOffsetY * scale,
+      };
+    });
   };
 
   const start = (event: PointerEvent<Element>, item: Interaction) => {
@@ -182,13 +235,12 @@ function MapSurface({
       const p = pointFrom(event); moved.current = true; onOverlayPreview(action.item, p.x, p.y); return;
     }
     if (action.kind === "resize") {
-      const rect = canvasRef.current!.getBoundingClientRect();
-      const width = clamp(action.width + ((event.clientX - action.startX) / (rect.width * view.scale)) * 100, 5, 45);
+      const width = clamp(action.width + ((event.clientX - action.startX) / Math.max(1, worldSize.width * view.scale)) * 100, 5, 45);
       moved.current = true; onOverlayResizePreview(action.item, width); return;
     }
     if (action.kind === "vertex") {
       const p = pointFrom(event);
-      const points = action.points.map((item, index) => index === action.index ? p : item);
+      const points = action.points.map((item, index) => index === action.index ? { x: p.x, y: p.y } : item);
       moved.current = true; onRegionPreview(action.item, points);
     }
   };
@@ -201,12 +253,11 @@ function MapSurface({
     } else if (action.kind === "overlay") {
       const p = pointFrom(event); onOverlayCommit(action.item, p.x, p.y);
     } else if (action.kind === "resize") {
-      const rect = canvasRef.current!.getBoundingClientRect();
-      const width = clamp(action.width + ((event.clientX - action.startX) / (rect.width * view.scale)) * 100, 5, 45);
+      const width = clamp(action.width + ((event.clientX - action.startX) / Math.max(1, worldSize.width * view.scale)) * 100, 5, 45);
       onOverlayResizeCommit(action.item, width);
     } else if (action.kind === "vertex") {
       const p = pointFrom(event);
-      const points = action.points.map((item, index) => index === action.index ? p : item);
+      const points = action.points.map((item, index) => index === action.index ? { x: p.x, y: p.y } : item);
       onRegionCommit(action.item, points);
     }
     interaction.current = null;
@@ -226,12 +277,12 @@ function MapSurface({
 
   const draft = regionDraft.map((point) => `${point.x},${point.y}`).join(" ");
   const hint = tool === "browse"
-    ? "Обзор: колесо — масштаб, ЛКМ по пустому месту — перемещение, по объекту — открыть."
+    ? "Обзор: колесо — масштаб, ЛКМ по свободному полю — перемещение, по объекту — открыть."
     : tool === "select"
-      ? "Редактирование: тяните объекты и вершины ЛКМ. Размер иллюстрации меняется за зелёную ручку."
+      ? "Редактирование: тяните метки, изображения и белые вершины ЛКМ. Размер объекта — за зелёную ручку."
       : tool === "marker"
-        ? "Нажмите на свободное место, затем выберите статью для новой метки."
-        : "Ставьте вершины региона. Когда готовы — сохраните контур.";
+        ? "Нажмите в пределах изображения карты, затем выберите статью для новой метки."
+        : "Ставьте вершины в пределах изображения. Когда готовы — сохраните контур.";
   const styleForOverlay = (overlay: MapOverlay): CSSProperties => ({
     left: `${overlay.x}%`, top: `${overlay.y}%`, width: `${overlay.width}%`, "--overlay-aspect": String(overlay.aspect_ratio || 1.5),
   } as CSSProperties);
@@ -288,10 +339,11 @@ function MapSurface({
       onContextMenu={(event) => event.preventDefault()}
     >
       <div
-        className="map-art"
+        className={`map-world ${map.image_url ? "has-image" : ""}`}
         style={{
-          transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
-          backgroundImage: map.image_url ? `linear-gradient(rgba(13,12,18,.12),rgba(13,12,18,.28)),url("${map.image_url}")` : undefined,
+          width: `${worldSize.width}px`, height: `${worldSize.height}px`,
+          left: `calc(50% + ${view.x}px)`, top: `calc(50% + ${view.y}px)`,
+          transform: `translate(-50%, -50%) scale(${view.scale})`,
         }}
         onPointerDown={(event) => {
           if (tool === "browse" && event.target === event.currentTarget) {
@@ -301,12 +353,16 @@ function MapSurface({
         onClick={(event) => {
           if (moved.current) { moved.current = false; return; }
           if (event.target !== event.currentTarget) return;
-          const p = pointFrom(event);
+          const p = pointFrom(event, false);
+          if (!p.inside) return;
           if (tool === "marker") onMarkerPlace(p.x, p.y);
           if (tool === "region") onRegionPoint(p.x, p.y);
         }}
       >
-        {!map.image_url && <>
+        {map.image_url ? <img className="map-background-image" src={map.image_url} alt={`Фон карты «${map.title}»`} draggable={false} onLoad={(event) => {
+          const image = event.currentTarget;
+          if (image.naturalWidth > 0 && image.naturalHeight > 0) setDetectedAspect(image.naturalWidth / image.naturalHeight);
+        }} /> : <>
           <div className="map-glow one" /><div className="map-glow two" />
           <div className="map-label label-a">СОЛЁНОЕ МОРЕ</div><div className="map-label label-b">ТИХИЕ ПОЛЯ</div><div className="map-label label-c">ПЕПЕЛЬНЫЕ ЗЕМЛИ</div>
         </>}
@@ -373,6 +429,7 @@ function MapSurface({
           <span className="marker-name">{marker.label || marker.card_title}</span>
         </button>)}
       </div>
+      <div className="map-ratio-note">{map.image_url ? "Оригинальные пропорции карты" : "Черновой фон — загрузите карту в редакторе"}</div>
       {adminMode && <div className={`map-edit-hint ${tool === "region" ? "region-hint" : ""}`}>
         <span>{hint}</span>
         {tool === "region" && <>
@@ -383,7 +440,6 @@ function MapSurface({
     </div>
   </section>;
 }
-
 
 function LibraryView({ cards, onSelect }: { cards: Card[]; onSelect: (card: Card) => void }) { return <section className="catalog-view"><div className="content-heading"><span className="eyebrow">Библиотека мира</span><h1>Все статьи</h1><p>Места, персонажи, фракции, артефакты и исторические события.</p></div><div className="library-grid">{cards.map((card) => <button className="library-card" key={card.id} onClick={() => onSelect(card)}><div className="library-cover" style={{ background: card.cover_image_url ? `linear-gradient(rgba(20,17,25,.14),rgba(20,17,25,.48)),url("${card.cover_image_url}") center/cover` : `linear-gradient(145deg,${card.cover_color},#211a2a)` }}><span>{typeMeta[card.type].icon}</span></div><div><small>{typeMeta[card.type].label}</small><h2>{card.title}</h2><p>{card.excerpt}</p><div className="card-tags">{card.tags.slice(0, 3).map((tag) => <i key={tag}>#{tag}</i>)}</div></div></button>)}</div></section>; }
 function TimelineView({ events, onSelect }: { events: TimelineEvent[]; onSelect: (id: number) => void }) { return <section className="timeline-view"><div className="content-heading"><span className="eyebrow">История мира</span><h1>Таймлайн</h1><p>События и статьи, расположенные по хронологии.</p></div>{events.length ? <div className="timeline-list">{events.map((event) => <button className="timeline-card" key={event.id} onClick={() => onSelect(event.card_id)}><time className="timeline-year">{event.date_label}</time><span className="timeline-pin" style={{ borderColor: event.card_color }} /><div className="timeline-entry"><span>{typeMeta[event.card_type].label}</span><h2>{event.card_title}</h2><p>{event.description}</p></div></button>)}</div> : <div className="empty-state">Пока нет записей. В редакторе включите «Показать на таймлайне» для любой карточки.</div>}</section>; }
@@ -597,8 +653,11 @@ export function AtlasApp({ adminMode = false }: { adminMode?: boolean }) {
 
   async function uploadMapImage(file: File) {
     if (!map || !activeMapId) return;
-    try { const image_url = await upload(file); await api.updateMap(activeMapId, { title: map.title, subtitle: map.subtitle, image_url }); await reload(activeMapId); }
-    catch { /* message is set by upload */ }
+    try {
+      const [image_url, image_aspect_ratio] = await Promise.all([upload(file), fileAspect(file)]);
+      await api.updateMap(activeMapId, { title: map.title, subtitle: map.subtitle, image_url, image_aspect_ratio });
+      await reload(activeMapId);
+    } catch { /* message is set by upload */ }
   }
   async function editMapDetails() {
     if (!map || !activeMapId) return;
@@ -606,7 +665,7 @@ export function AtlasApp({ adminMode = false }: { adminMode?: boolean }) {
     if (!title) return;
     const subtitle = window.prompt("Подзаголовок карты", map.subtitle);
     if (subtitle === null) return;
-    try { await api.updateMap(activeMapId, { title, subtitle, image_url: map.image_url }); await reload(activeMapId); }
+    try { await api.updateMap(activeMapId, { title, subtitle, image_url: map.image_url, image_aspect_ratio: map.image_aspect_ratio ?? null }); await reload(activeMapId); }
     catch (cause) { setError(cause instanceof Error ? cause.message : "Не удалось обновить настройки карты."); }
   }
   async function addMap() {
@@ -614,7 +673,7 @@ export function AtlasApp({ adminMode = false }: { adminMode?: boolean }) {
     if (!title?.trim()) return;
     const subtitle = window.prompt("Короткое описание", "") ?? "";
     try {
-      const saved = await api.createMap({ title: title.trim(), subtitle, image_url: null });
+      const saved = await api.createMap({ title: title.trim(), subtitle, image_url: null, image_aspect_ratio: null });
       clearMapSelection();
       await reload(saved.id);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Не удалось создать карту."); }
@@ -702,7 +761,7 @@ export function AtlasApp({ adminMode = false }: { adminMode?: boolean }) {
         <button className={view === "library" ? "active" : ""} onClick={() => setView("library")}>▤ Библиотека <span>{cards.length}</span></button>
         <button className={view === "timeline" ? "active" : ""} onClick={() => setView("timeline")}>⌁ Таймлайн <span>{timeline.length}</span></button>
       </nav>
-      <div className="sidebar-intro"><span className="eyebrow">Мир Эйры</span><p>{adminMode ? "Редактор карт и связанной wiki." : "Живой атлас мест, людей, событий и тайн."}</p></div>
+      <div className="sidebar-intro"><span className="eyebrow">Сделано Сержом за шавуху и энергос</span><p>{adminMode ? "Редактор карт и связанной wiki." : "Живой атлас мест, людей, событий и тайн."}</p></div>
       <div className="search-box"><span>⌕</span><input placeholder="Искать в энциклопедии" value={query} onChange={(event) => setQuery(event.target.value)} /><kbd>⌘K</kbd></div>
       <div className="filter-row"><button className={filter === "all" ? "active" : ""} onClick={() => setFilter("all")}>Все <span>{cards.length}</span></button>{Object.entries(typeMeta).map(([key, meta]) => <button key={key} className={filter === key ? "active" : ""} onClick={() => setFilter(key as CardType)}>{meta.icon} <span>{meta.label}</span></button>)}</div>
 
@@ -726,7 +785,7 @@ export function AtlasApp({ adminMode = false }: { adminMode?: boolean }) {
         {map.overlays.map((overlay) => <div className="asset-row" key={overlay.id}><button className="asset-open" onClick={() => { setSelectedOverlayId(overlay.id); setSelectedRegionId(null); }}><img src={overlay.image_url} alt="" /><b>{overlay.label || overlay.card_title || "Изображение"}</b></button><button title="Удалить объект" onClick={() => { if (confirm("Удалить объект с карты?")) void deleteOverlay(overlay.id); }}>×</button></div>)}
         <div className="map-danger-zone"><button className="text-button danger-text" disabled={maps.length <= 1} onClick={() => void deleteCurrentMap()}>Удалить эту карту</button></div>
       </section>}
-      <footer><span>{adminMode ? "Доступ: хранитель" : "Только просмотр"}</span><span>•</span><span>v0.5</span></footer>
+      <footer><span>{adminMode ? "Доступ: хранитель" : "Только просмотр"}</span><span>•</span><span>v0.6</span></footer>
     </aside>
 
     <div className="content-area">

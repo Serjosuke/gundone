@@ -65,6 +65,7 @@ export type MapPayload = {
   title: string;
   subtitle: string;
   image_url: string | null;
+  image_aspect_ratio: number | null;
   markers: Marker[];
   regions: Region[];
   overlays: MapOverlay[];
@@ -77,6 +78,7 @@ export type MapSummary = {
   title: string;
   subtitle: string;
   image_url: string | null;
+  image_aspect_ratio: number | null;
   marker_count: number;
   region_count: number;
   overlay_count: number;

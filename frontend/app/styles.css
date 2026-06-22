@@ -227,3 +227,63 @@ select, select option { color:#f4eff8; background:#201a28; }
   .map-list-panel { display:none; }
   .zoom-readout { display:none; }
 }
+
+/* v0.6 — map canvas preserves each original image ratio */
+.map-canvas {
+  background:
+    radial-gradient(circle at 50% 45%, rgba(120, 93, 151, .16), transparent 45%),
+    linear-gradient(145deg, #15111a, #0e0c12);
+}
+.map-world {
+  position:absolute;
+  overflow:visible;
+  transform-origin:center center;
+  background:
+    radial-gradient(circle at 38% 45%, #5e546a 0 3%, transparent 3.5%),
+    radial-gradient(circle at 59% 30%, #655a73 0 2.4%, transparent 2.8%),
+    linear-gradient(135deg,#2d2438,#3e3248 45%,#201b2a);
+  box-shadow:0 18px 45px rgba(0,0,0,.28), 0 0 0 1px rgba(255,255,255,.12);
+  touch-action:none;
+  user-select:none;
+  -webkit-user-select:none;
+}
+.map-world.has-image { background:#0d0b10; }
+.map-world.has-image::before {
+  content:"";
+  position:absolute;
+  inset:0;
+  z-index:1;
+  pointer-events:none;
+  background:linear-gradient(180deg, rgba(13,12,18,.07), rgba(13,12,18,.25));
+}
+.map-background-image {
+  position:absolute;
+  inset:0;
+  display:block;
+  width:100%;
+  height:100%;
+  object-fit:contain;
+  pointer-events:none;
+  user-select:none;
+  -webkit-user-drag:none;
+}
+.map-world .regions-layer { z-index:2; }
+.map-world .map-overlay { z-index:7; }
+.map-world .marker { z-index:10; }
+.map-ratio-note {
+  position:absolute;
+  z-index:13;
+  top:12px;
+  right:12px;
+  padding:6px 8px;
+  border:1px solid rgba(255,255,255,.12);
+  border-radius:7px;
+  color:rgba(240,235,246,.7);
+  background:rgba(13,11,18,.66);
+  backdrop-filter:blur(9px);
+  font-size:9px;
+  pointer-events:none;
+}
+@media (max-width:760px) {
+  .map-ratio-note { top:8px; right:8px; font-size:8px; }
+}
