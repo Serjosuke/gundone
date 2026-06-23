@@ -831,7 +831,7 @@ export function AtlasApp({ adminMode = false }: { adminMode?: boolean }) {
 
   return <main className="app-shell">
     <header className="topbar">
-      <a className="brand" href={adminMode ? "/admin" : "/"}><span className="brand-mark">A</span><span><b>Timur Gandon</b><small>{adminMode ? "keeper console" : "world encyclopedia"}</small></span></a>
+      <a className="brand" href={adminMode ? "/admin" : "/"}><span className="brand-mark">A</span><span><b>Fenetraur</b><small>{adminMode ? "keeper console" : "world encyclopedia"}</small></span></a>
       <div className="topbar-actions">
         {adminMode ? <><a className="ghost-link" href="/" target="_blank">Публичный сайт ↗</a><button className="ghost-button" onClick={logout}>Выйти</button><button className="primary-button" onClick={() => setEditingCard("new")}>+ Статья</button></> : <a className="ghost-link" href="/admin">Войти хранителю</a>}
       </div>
@@ -843,7 +843,7 @@ export function AtlasApp({ adminMode = false }: { adminMode?: boolean }) {
         <button className={view === "library" ? "active" : ""} onClick={() => setView("library")}>▤ Библиотека <span>{cards.length}</span></button>
         <button className={view === "timeline" ? "active" : ""} onClick={() => setView("timeline")}>⌁ Таймлайн <span>{timeline.length}</span></button>
       </nav>
-      <div className="sidebar-intro"><span className="eyebrow">Мир Эйры</span><p>{adminMode ? "Редактор карт и связанной wiki." : "Живой атлас мест, людей, событий и тайн."}</p></div>
+      <div className="sidebar-intro"><span className="eyebrow">Эээ, Орконо в президенты</span><p>{adminMode ? "Редактор карт и связанной wiki." : "Живой атлас мест, людей, событий и тайн."}</p></div>
       <div className="search-box"><span>⌕</span><input placeholder="Искать в энциклопедии" value={query} onChange={(event) => setQuery(event.target.value)} /><kbd>⌘K</kbd></div>
       <div className="filter-row"><button className={filter === "all" ? "active" : ""} onClick={() => { setFilter("all"); setSubtypeFilter("all"); }}>Все <span>{cards.length}</span></button>{Object.entries(typeMeta).map(([key, meta]) => <button key={key} className={filter === key ? "active" : ""} onClick={() => { setFilter(key as CardType); setSubtypeFilter("all"); }}>{meta.icon} <span>{meta.label}</span></button>)}</div>
       {availableSubtypes.length > 0 && <div className="subtype-row"><button className={subtypeFilter === "all" ? "active" : ""} onClick={() => setSubtypeFilter("all")}>Все подтипы</button>{availableSubtypes.map((subtype) => <button key={subtype} className={subtypeFilter === subtype ? "active" : ""} onClick={() => setSubtypeFilter(subtype)}>{subtype}</button>)}</div>}
