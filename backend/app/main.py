@@ -33,7 +33,7 @@ TOKEN_TTL_SECONDS = int(os.getenv("TOKEN_TTL_SECONDS", str(60 * 60 * 24 * 7)))
 CORS_ORIGINS = [item.strip() for item in os.getenv("CORS_ORIGINS", "*").split(",") if item.strip()]
 ALLOWED_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 
-app = FastAPI(title="Timur Gandon API", version="0.7.1")
+app = FastAPI(title="Fenetraur API", version="0.7.1")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS or ["*"],

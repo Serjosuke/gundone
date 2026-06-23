@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./styles.css";
 
 export const metadata: Metadata = {
-  title: "Timur Gandon",
-  description: "Интерактивная карта и энциклопедия мира СПЕЦИАЛЬНО ДЛЯ ДАЗОШИ",
+  title: "Fenetraur",
+  description: "Интерактивная карта и энциклопедия мира Фенетраура",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
